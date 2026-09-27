@@ -70,15 +70,30 @@ def guide():
             'next_step': '结合目标、近期尝试和观察，建议继续、重试、换方法、询问、升级或停止。',
             'relevance': '根据目标和待评估材料，判断材料的相关程度。',
         },
+        'model_routing': {
+            'what_it_does': '开关打开后，每轮用户消息会被动让 Jev 从当前 Hermes provider 的模型目录中选一个，并只改本轮后续请求的 model 字段；不换 provider，也不改持久化默认模型。',
+            'tool': 'jev_route',
+            'switch': 'plugins.entries.jev.settings.model_route_enabled',
+            'cli': 'hermes jev auto-route --enable',
+            'config_key': 'model_routes',
+            'example_request': {
+                'task': '为登录故障定位根因并修改测试',
+                'candidates': [
+                    {'id': 'fast', 'model': 'your-cheap-model', 'description': '简单问答、格式化和小改动，低成本快速响应。'},
+                    {'id': 'reasoning', 'model': 'your-reasoning-model', 'description': '复杂调试、多文件修改和需要长链路推理的任务。'},
+                ],
+            },
+            'note': '默认关闭。打开后无需用户主动要求 jev_route。未配置 model_routes 时自动读取当前 Hermes 模型目录。每轮一次 Jev 请求，可能计费。',
+        },
         'example_prompts': {
             'task_triage': '请加载 jev:decision-sidekick，用 task_triage 评估“整理项目文档”，只给建议，不执行。',
             'next_step': '请用 Jev next_step 评估：目标是修复测试；同一修改已重试两次，错误不变。建议下一步，不执行。',
             'relevance': '请用 Jev relevance 评估：目标是排查登录失败；材料是一段已去除敏感信息的认证错误摘要。',
         },
         'billing': {
-            'free_commands': ['status', 'guide', 'presets'],
-            'paid_commands': ['setup', 'test', 'evaluate'],
-            'notice': 'status / guide / presets 仅在本地运行，不发 API 请求。setup 会发送一次在线验证；test / evaluate 会向所选提供商发请求，可能计费。仅发送最少必要且不含密钥的数据。',
+            'free_commands': ['status', 'guide', 'presets', 'routes', 'auto-route'],
+            'paid_commands': ['setup', 'test', 'evaluate', 'route'],
+            'notice': 'status / guide / presets / routes / auto-route 仅在本地运行，不发 API 请求。setup 会发送一次在线验证；test / evaluate / route 会向所选提供商发请求，可能计费。仅发送最少必要且不含密钥的数据。',
         },
         'skill': {
             'name': 'jev:decision-sidekick',
@@ -107,8 +122,14 @@ def build_parser(parser):
     subs.add_parser('guide', help='Free local onboarding, examples and billing boundaries; no API call')
     subs.add_parser('test', help='One billed Chinese smoke call covering all three primitives')
     subs.add_parser('presets', help='Print available decision rubrics, no API call')
+    subs.add_parser('routes', help='Show configured or discovered model routes without an API call')
+    auto = subs.add_parser('auto-route', help='Enable or disable passive per-turn Hermes model routing')
+    auto.add_argument('--enable', action='store_true', help='Turn on automatic model routing')
+    auto.add_argument('--disable', action='store_true', help='Turn off automatic model routing')
     evaluation = subs.add_parser('evaluate', help='Evaluate a JSON request file (paid external request)')
     evaluation.add_argument('--file', required=True, help='JSON object with state and preset OR questions')
+    routing = subs.add_parser('route', help='Choose a model profile for a task (paid external request)')
+    routing.add_argument('--file', required=True, help='JSON object with task and optional candidates')
 
 
 def smoke_test(service):
@@ -148,9 +169,25 @@ def dispatch(ctx, args):
             if len(data) > 1_048_576:
                 raise ValueError('Request file exceeds the 1 MiB local limit.')
             result = service.run(json.loads(data))
+        elif args.jev_command == 'route':
+            with Path(args.file).open('rb') as handle:
+                data = handle.read(1_048_577)
+            if len(data) > 1_048_576:
+                raise ValueError('Request file exceeds the 1 MiB local limit.')
+            result = service.route(json.loads(data))
+        elif args.jev_command == 'auto-route':
+            if args.enable and args.disable:
+                raise ValueError('Choose --enable or --disable, not both.')
+            if args.enable:
+                result = service.set_auto_route(True)
+            elif args.disable:
+                result = service.set_auto_route(False)
+            else:
+                result = {'ok': True, 'model_route_enabled': service.auto_route_enabled(),
+                          'advisory_only': True, 'execution_authorized': False}
         else:
             actions = {'status': service.status, 'guide': guide, 'presets': lambda: {'presets': PRESETS},
-                       'test': lambda: smoke_test(service)}
+                       'routes': service.routes, 'test': lambda: smoke_test(service)}
             result = actions[args.jev_command]()
     except (KeyboardInterrupt, EOFError):
         print('Cancelled; no further action taken.')

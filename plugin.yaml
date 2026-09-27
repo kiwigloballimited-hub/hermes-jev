@@ -1,5 +1,5 @@
 name: jev
-version: 0.1.2
+version: 0.1.6
 description: Explicit Jev decisions via TypeSafe, Cloudflare or OpenRouter, with a shared agent tool and CLI.
 manifest_version: 1
 license: MIT
@@ -8,7 +8,12 @@ python_dependencies:
   - "httpx>=0.28,<0.29"
 provides_tools:
   - jev_evaluate
-provides_hooks: []
+  - jev_route
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+provides_middleware:
+  - llm_request
 config_schema:
   connection:
     type: dict
@@ -17,3 +22,14 @@ config_schema:
   review_threshold:
     type: float
     description: Optional opt-in review heuristic; unset disables threshold gating. Not an authorization threshold.
+  model_route_enabled:
+    type: bool
+    default: false
+    description: When true, Jev automatically selects a Hermes model each user turn without an explicit jev_route call.
+  model_routes:
+    type: list
+    default: []
+    description: Optional non-secret model profiles used by jev_route; empty means discover the current Hermes provider catalog.
+  route_min_confidence:
+    type: float
+    description: Optional threshold for model routing; unset accepts a Jev choice but never authorizes execution.
